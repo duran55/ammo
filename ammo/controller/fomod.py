@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os
 import shutil
-import textwrap
 from dataclasses import (
     dataclass,
     field,
@@ -10,6 +9,8 @@ from functools import reduce
 from pathlib import Path
 from xml.etree import ElementTree
 
+from dialog import Dialog
+
 from ammo.component import (
     BethesdaMod,
     Mod,
@@ -17,6 +18,7 @@ from ammo.component import (
 from ammo.lib import (
     casefold_path,
     ignored,
+    UserExit,
 )
 from ammo.ui import Controller
 
@@ -90,78 +92,78 @@ class FomodController(Controller):
 
         # Get the pages
         self.steps: list[Page] = self.get_pages()
-        self.page_index: int = 0
         self.flags = self.get_flags()
         self.visible_pages: list[Page] = self.get_visible_pages()
-        self.page: Page = self.steps[
-            self.steps.index(self.visible_pages[self.page_index])
-        ]
-        self.selection_type: str = self.page.archtype.lower()
-        self.populate_index_commands()
 
-    def __str__(self) -> str:
-        num_pages = len(self.visible_pages)
-        result = f"{self.module_name} {self.page.step_name}\n"
-        result += "--------------------------------\n"
-        result += f"Page {self.page_index + 1} / {num_pages}: {self.visible_pages[self.page_index].name}\n"
-        result += "--------------------------------\n\n"
-        for selection in self.page.selections:
-            if selection.selected and selection.description:
-                result += f"{selection.name}\n"
-                result += "--------------------------------\n"
-                for line in textwrap.wrap(f"{selection.description}\n\n"):
-                    result += f"{line}\n"
-                result += "\n"
-
-        result += " index | Activated | Option Name\n"
-        result += "-------|-----------|------------\n"
-
-        for i, selection in enumerate(self.page.selections):
-            index = f"[{i}]"
-            enabled = f"[{selection.selected}]"
-            result += f"{index:<7} {enabled:<11} {selection.name}\n"
-        result += "\n"
-        return result
-
-    def prompt(self) -> str:
-        return f"{self.selection_type} >_: "
-
-    def postcmd(self) -> bool:
-        self.flags = self.get_flags()
-        self.visible_pages: list[Page] = self.get_visible_pages()
-        if self.page_index >= len(self.visible_pages):
-            # The user advanced to the end of the installer.
-            install_nodes: list[ElementTree.Element] = self.get_nodes()
-            self.install_files(install_nodes)
-            return True
-
-        self.page: Page = self.steps[
-            self.steps.index(self.visible_pages[self.page_index])
-        ]
-        self.selection_type: str = self.page.archtype.lower()
-        self.populate_index_commands()
-        return False
-
-    def autocomplete(self, text: str, state: int) -> str | None:
-        return super().autocomplete(text, state)
-
-    def populate_index_commands(self) -> None:
+    def run(self) -> None:
         """
-        Hack to get dynamically allocated methods which are
-        named after numbers, one for each selectable option.
+        Run the dialog-based TUI wizard for configuring this fomod.
         """
-        # Remove all attributes that are numbers
-        for i in list(self.__dict__.keys()):
-            with ignored(ValueError):
-                int(i.lstrip("do_"))
-                del self.__dict__[i]
-        for i in range(len(self.page.selections)):
+        d = Dialog(dialog="dialog", autowidgetsize=True)
+        d.set_background_title(self.module_name)
 
-            def func(self, i=i):
-                self.select(i)
+        page_index = 0
+        while True:
+            self.flags = self.get_flags()
+            self.visible_pages = self.get_visible_pages()
 
-            setattr(self, f"do_{i}", func)
-            self.__dict__[f"do_{i}"].__doc__ = f"Toggle {self.page.selections[i].name}"
+            if page_index >= len(self.visible_pages):
+                break
+
+            page = self.steps[self.steps.index(self.visible_pages[page_index])]
+
+            # Build choices list for the dialog.
+            choices = []
+            for i, selection in enumerate(page.selections):
+                choices.append((selection.name, str(i), selection.selected))
+
+            # Build the message text with descriptions.
+            msg = page.name
+            if page.step_name:
+                msg = f"{page.step_name}\n\n{msg}"
+
+            title = f"Page {page_index + 1} / {len(self.visible_pages)}"
+
+            # Show the appropriate dialog based on archetype.
+            if page.archtype in ("SelectExactlyOne", "SelectAtMostOne"):
+                if page.archtype == "SelectAtMostOne":
+                    choices.insert(
+                        0, ("(None)", "", not any(s.selected for s in page.selections))
+                    )
+                code, tag = d.radiolist(
+                    msg,
+                    title=title,
+                    choices=choices,
+                    extra_button=page_index > 0,
+                    extra_label="Back",
+                )
+            else:
+                code, tag = d.checklist(
+                    msg,
+                    title=title,
+                    choices=choices,
+                    extra_button=page_index > 0,
+                    extra_label="Back",
+                )
+
+            if code == d.OK:
+                if page.archtype in ("SelectExactlyOne", "SelectAtMostOne"):
+                    for i, selection in enumerate(page.selections):
+                        selection.selected = str(i) == tag
+                else:
+                    selected_tags = tag if isinstance(tag, list) else []
+                    for i, selection in enumerate(page.selections):
+                        selection.selected = str(i) in selected_tags
+                page_index += 1
+            elif code == d.EXTRA:
+                page_index -= 1
+                if page_index < 0:
+                    page_index = 0
+            else:
+                raise UserExit("FOMOD configuration cancelled.")
+
+        install_nodes = self.get_nodes()
+        self.install_files(install_nodes)
 
     def get_pages(self) -> list[Page]:
         """
@@ -463,18 +465,3 @@ class FomodController(Controller):
 
         self.mod.files.clear()
         self.mod.populate_files(self.mod.location / "ammo_fomod", self.mod.game_root)
-
-    def do_b(self) -> None:
-        """
-        Return to the previous page
-        """
-        self.page_index -= 1
-        if self.page_index < 0:
-            self.page_index = 0
-            raise Warning("Can't go back from here.")
-
-    def do_n(self) -> None:
-        """
-        Advance to the next page
-        """
-        self.page_index += 1

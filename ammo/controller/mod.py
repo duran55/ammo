@@ -885,13 +885,9 @@ class ModController(DownloadController):
         self.do_commit()
         self.do_refresh()
 
-        # We need to instantiate a FomodController and run it against the UI.
-        # This will be a new instance of the UI.
+        # We need to instantiate a FomodController and run the dialog wizard.
         fomod_controller = FomodController(mod)
-        ui = UI(fomod_controller)
-        # ui read/execute/print/loop will break from its loop when the user
-        # exits or advances past the last page of the fomod config wizard.
-        ui.repl()
+        fomod_controller.run()
 
         # If we can rebuild the "files" property of the mod, refreshing the controller
         # and preventing configuration when there are unsaved changes
