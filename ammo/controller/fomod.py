@@ -18,7 +18,6 @@ from ammo.component import (
 from ammo.lib import (
     casefold_path,
     ignored,
-    UserExit,
 )
 from ammo.ui import Controller
 
@@ -63,6 +62,18 @@ class Page:
 
 
 class FomodController(Controller):
+    def __str__(self) -> str:
+        return ""
+
+    def autocomplete(self, text: str, state: int) -> str | None:
+        return None
+
+    def postcmd(self) -> bool:
+        return False
+
+    def prompt(self) -> str:
+        return ">_: "
+
     def __init__(self, mod: Mod | BethesdaMod):
         self.mod: Mod | BethesdaMod = mod
 
@@ -99,8 +110,8 @@ class FomodController(Controller):
         """
         Run the dialog-based TUI wizard for configuring this fomod.
         """
-        d = Dialog(dialog="dialog", autowidgetsize=True)
-        d.set_background_title(self.module_name)
+        d = Dialog(dialog="dialog")
+        d.set_background_title("Fomod Installer")
 
         page_index = 0
         while True:
@@ -113,9 +124,11 @@ class FomodController(Controller):
             page = self.steps[self.steps.index(self.visible_pages[page_index])]
 
             # Build choices list for the dialog.
+            # pythondialog expects choices as (tag, item, status).
+            # The tag is what dialog returns; it must be unique per choice.
             choices = []
             for i, selection in enumerate(page.selections):
-                choices.append((selection.name, str(i), selection.selected))
+                choices.append((str(i), selection.name, selection.selected))
 
             # Build the message text with descriptions.
             msg = page.name
@@ -128,7 +141,12 @@ class FomodController(Controller):
             if page.archtype in ("SelectExactlyOne", "SelectAtMostOne"):
                 if page.archtype == "SelectAtMostOne":
                     choices.insert(
-                        0, ("(None)", "", not any(s.selected for s in page.selections))
+                        0,
+                        (
+                            "none",
+                            "(None)",
+                            not any(s.selected for s in page.selections),
+                        ),
                     )
                 code, tag = d.radiolist(
                     msg,
@@ -148,8 +166,12 @@ class FomodController(Controller):
 
             if code == d.OK:
                 if page.archtype in ("SelectExactlyOne", "SelectAtMostOne"):
-                    for i, selection in enumerate(page.selections):
-                        selection.selected = str(i) == tag
+                    if page.archtype == "SelectAtMostOne" and tag == "none":
+                        for selection in page.selections:
+                            selection.selected = False
+                    else:
+                        for i, selection in enumerate(page.selections):
+                            selection.selected = str(i) == tag
                 else:
                     selected_tags = tag if isinstance(tag, list) else []
                     for i, selection in enumerate(page.selections):
@@ -160,7 +182,7 @@ class FomodController(Controller):
                 if page_index < 0:
                     page_index = 0
             else:
-                raise UserExit("FOMOD configuration cancelled.")
+                return
 
         install_nodes = self.get_nodes()
         self.install_files(install_nodes)
@@ -174,7 +196,7 @@ class FomodController(Controller):
         for step in self.xml_root_node.find("installSteps"):
             install_step_name = step.get("name", "")
             if install_step_name:
-                install_step_name = f"- {install_step_name}"
+                install_step_name = f"{install_step_name}"
             for optional_file_groups in step:
                 for group in optional_file_groups:
                     if (group_of_plugins := group.find("plugins")) is None:
@@ -273,6 +295,8 @@ class FomodController(Controller):
 
         Returns whether the plugin which owns dependency matches.
         """
+        if not flags:
+            return True
         match = False
         for k, v in flags.items():
             if k in self.flags:
