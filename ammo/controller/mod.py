@@ -1055,7 +1055,20 @@ class ModController(DownloadController):
         """
         Extract and manage an archive from ~/Downloads.
         """
-        return super().install(index, self.game.ammo_mods_dir)
+        existing_mod_names = {mod.name for mod in self.mods}
+        super().install(index, self.game.ammo_mods_dir)
+        new_fomod_names = [
+            mod.name
+            for mod in self.mods
+            if mod.name not in existing_mod_names
+            and mod.fomod
+            and not (mod.location / "ammo_fomod").exists()
+        ]
+        for name in new_fomod_names:
+            for i, mod in enumerate(self.mods):
+                if mod.name == name:
+                    self.do_configure(i)
+                    break
 
     @requires_sync
     def do_tools(self) -> None:
