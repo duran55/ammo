@@ -4,3 +4,4 @@ ammo.egg-info/
 build/
 .coverage
 uv.lock
+.qwen/
